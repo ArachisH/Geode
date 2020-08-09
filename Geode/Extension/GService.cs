@@ -21,6 +21,7 @@ namespace Geode.Extension
 {
     public class GService : IExtension, IHConnection, IDisposable
     {
+        public bool HarbleAPI_Failed = false; /*Fixed: HarbleAPI_Failed added*/
         private readonly HNode _installer;
         private readonly IExtension _container;
         private readonly List<DataCaptureAttribute> _unknownDataAttributes;
@@ -124,7 +125,7 @@ namespace Geode.Extension
             }
 
             _installer = HNode.ConnectNewAsync(moduleServer ?? DefaultModuleServer).GetAwaiter().GetResult();
-            if (_installer == null) throw new Exception("Failed to establish a connection with the extension server: " + moduleServer);
+            if (_installer == null) { OnCriticalError("Connection failed"); return; } /*Fixed: Send OnCriticalError event*/
             Task handleInstallerDataTask = HandleInstallerDataAsync();
         }
 
@@ -166,19 +167,26 @@ namespace Geode.Extension
             string stringifiedInterceptionData = Encoding.GetEncoding("latin1").GetString(packet.ReadBytes(stringifiedInteceptionDataLength));
 
             var dataInterceptedArgs = new DataInterceptedEventArgs(stringifiedInterceptionData);
-            HandleGameObjects(dataInterceptedArgs.Packet, dataInterceptedArgs.IsOutgoing);
+            OnDataIntercept(dataInterceptedArgs); /*Fixed: Handle data with OnDataIntercept*/
+        }
+        public virtual void OnDataIntercept(DataInterceptedEventArgs data) /*Fixed: Added OnDataIntercept event*/
+        {
+            if (HarbleAPI_Failed == false) /*Fixed: HarbleAPI_Failed added*/
+            {
+                HandleGameObjects(data.Packet, data.IsOutgoing);
+            }
 
-            Dictionary<ushort, List<DataCaptureAttribute>> callbacks = dataInterceptedArgs.IsOutgoing ? _outDataAttributes : _inDataAttributes;
-            if (callbacks.TryGetValue(dataInterceptedArgs.Packet.Id, out List<DataCaptureAttribute> attributes))
+            Dictionary<ushort, List<DataCaptureAttribute>> callbacks = data.IsOutgoing ? _outDataAttributes : _inDataAttributes;
+            if (callbacks.TryGetValue(data.Packet.Id, out List<DataCaptureAttribute> attributes))
             {
                 foreach (DataCaptureAttribute attribute in attributes)
                 {
-                    dataInterceptedArgs.Packet.Position = 0;
-                    attribute.Invoke(dataInterceptedArgs);
+                    data.Packet.Position = 0;
+                    attribute.Invoke(data);
                 }
             }
 
-            string stringified = dataInterceptedArgs.ToString(true);
+            string stringified = data.ToString(true);
             _installer.SendPacketAsync(MANIPULATED_PACKET, stringified.Length, Encoding.GetEncoding("latin1").GetBytes(stringified));
         }
 
@@ -192,15 +200,20 @@ namespace Geode.Extension
             Revision = packet.ReadUTF8();
 
             HWorld world = null;
-            string messagesPath = packet.ReadUTF8();
-            using (FileStream messagesStream = File.OpenRead(messagesPath))
+            try
             {
-                world = (HWorld)_worldSerializer.ReadObject(messagesStream);
+                string messagesPath = packet.ReadUTF8();
+                using (FileStream messagesStream = File.OpenRead(messagesPath))
+                {
+                    world = (HWorld)_worldSerializer.ReadObject(messagesStream);
 
-                Revision = world.Revision;
-                In = new Incoming(world.In);
-                Out = new Outgoing(world.Out);
+                    Revision = world.Revision;
+                    In = new Incoming(world.In);
+                    Out = new Outgoing(world.Out);
+                    HarbleAPI_Failed = false; /*Fixed: HarbleAPI_Failed added*/
+                }
             }
+            catch { HarbleAPI_Failed = true; } /*Fixed: HarbleAPI_Failed added*/
             ResolveCallbacks();
         }
         public virtual void OnDisconnected(HPacket packet)
@@ -210,6 +223,10 @@ namespace Geode.Extension
             _floorItems.Clear();
             _inDataAttributes.Clear();
             _outDataAttributes.Clear();
+        }
+        public virtual void OnCriticalError(string error_desc) /*Fixed: Added OnCriticalError event*/
+        {
+            Dispose();
         }
 
         public Task<int> SendToClientAsync(byte[] data)
@@ -287,8 +304,8 @@ namespace Geode.Extension
             await Task.Yield();
             try
             {
-                HPacket packet = await _installer.ReceivePacketAsync().ConfigureAwait(false);
-                if (packet == null) Environment.Exit(0);
+                HPacket packet = await _installer.ReceivePacketAsync().ConfigureAwait(true); /*Fixed: ConfigureAwait must be True*/
+                if (packet == null) { OnCriticalError("Empty packet input"); return; } /*Fixed: Send OnCriticalError event*/
 
                 Task handleInstallerDataTask = HandleInstallerDataAsync();
                 if (_extensionEvents.TryGetValue(packet.Id, out Action<HPacket> handler))
@@ -296,7 +313,7 @@ namespace Geode.Extension
                     handler(packet);
                 }
             }
-            catch { Environment.Exit(0); }
+            catch { OnCriticalError("Wrong packet input"); return; /*Fixed: Send OnCriticalError event*/ }
         }
         private void HandleGameObjects(HPacket packet, bool isOutgoing)
         {
@@ -370,7 +387,7 @@ namespace Geode.Extension
 
         public void Dispose()
         {
-            Dispose(true);
+            try { Dispose(true); } catch { Console.WriteLine("WARNING: Dispose event failed."); } /*Fixed: Added TryCatch to Dispose event*/
         }
         protected virtual void Dispose(bool disposing)
         {

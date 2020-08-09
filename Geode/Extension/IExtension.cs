@@ -26,9 +26,11 @@ namespace Geode.Extension
         void OnDoubleClick(HPacket packet);
         void OnInfoRequest(HPacket packet);
         void OnPacketIntercept(HPacket packet);
+        void OnDataIntercept(DataInterceptedEventArgs data); /*Fixed: Added OnDataIntercept event*/
 
         void OnInitialized(HPacket packet);
         void OnConnected(HPacket packet);
         void OnDisconnected(HPacket packet);
+        void OnCriticalError(string error_desc); /*Fixed: Added OnCriticalError event*/
     }
 }
